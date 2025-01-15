@@ -1,68 +1,70 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, ShoppingCart } from 'lucide-react';
-import axios from 'axios';
+import { Search, ShoppingCart, WifiOff } from 'lucide-react';
 import ProductList from './ProductList';
 import Cart from './Cart';
+import { fetchProducts } from '../../api/endpoints';
 
 const POSInterface = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [cartItems, setCartItems] = useState([]);
   const [products, setProducts] = useState([]);
+  const [error, setError] = useState('')
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isCartOpen, setIsCartOpen] = useState(false);
 
-  const api = axios.create({
-    baseURL: 'http://localhost:8080',
-    headers: {
-      'Authorization': 'token c3f05220bc1d4c1:24ac343f7b5a43d',
-      'Content-Type': 'application/json',
-    },
-  });
-
-
-
-  const fetchProducts = useCallback(async () => {
+  
+  const loadProducts = useCallback(async () => {
     try {
-      const response = await api.get('/api/method/frappe.desk.reportview.get', {
-        params: {
-          doctype: 'Item',
-          fields:
-            '["name","item_name","item_code","description","standard_rate","stock_uom","image"]',
-          filters: '[["disabled","=",0],["is_sales_item","=",1]]',
-        },
-      });
-
-      if (!response.data?.message) {
-        throw new Error('Invalid response structure');
+      // First try to fetch fresh data
+      const data = await fetchProducts();
+      if (data && data.length > 0) {
+        setProducts(data);
+        localStorage.setItem("items", JSON.stringify(data));
+        return;
       }
-
-      const { keys, values } = response.data.message;
-      const transformedProducts = values.map((item) => {
-        const keyValueMap = {};
-        keys.forEach((key, index) => {
-          keyValueMap[key] = item[index];
-        });
-
-        return {
-          id: keyValueMap.name,
-          name: keyValueMap.item_name,
-          code: keyValueMap.item_code,
-          description: keyValueMap.description,
-          price: parseFloat(keyValueMap.standard_rate) || 0,
-          uom: keyValueMap.stock_uom,
-          image: keyValueMap.image || '/api/placeholder/200/200',
-        };
-      });
-
-      setProducts(transformedProducts);
     } catch (err) {
-        console.log(err.response?.data?.exception || err.message || 'Failed to fetch products');
+      console.log('Failed to fetch fresh data, trying local storage:', err);
     }
-  }, [api]);
-
+  
+    // If online fetch fails or returns empty, try local storage
+    try {
+      const storedItems = localStorage.getItem('items');
+      if (storedItems) {
+        const parsedItems = JSON.parse(storedItems);
+        if (parsedItems && parsedItems.length > 0) {
+          setProducts(parsedItems);
+          return;
+        }
+      }
+    } catch (storageErr) {
+      console.error('Error reading from localStorage:', storageErr);
+    }
+  
+    // If both fail, set empty array and show error
+    setProducts([]);
+    setError('Unable to load products. Please check your connection.');
+  }, []);
+  
+  
   useEffect(() => {
-    fetchProducts();
-  }, [fetchProducts]);
-
+    const handleOnline = () => {
+      setIsOnline(true);
+      // Refresh data when we come back online
+      loadProducts();
+    };
+    const handleOffline = () => setIsOnline(false);
+  
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+  
+    // Initial load
+    loadProducts();
+  
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [loadProducts]);
   
 
   const addToCart = (product) => {
@@ -94,6 +96,7 @@ const POSInterface = () => {
       )
     );
   };
+  
 
   const calculateTotal = () => {
     return cartItems.reduce(
@@ -103,7 +106,19 @@ const POSInterface = () => {
   };
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex flex-col min-h-screen bg-gray-50">
+    {!isOnline && (
+      <div className="bg-amber-50 border-b border-amber-200">
+        <div className="max-w-7xl mx-auto px-4 py-2">
+          <div className="flex items-center justify-center gap-2 text-amber-800">
+            <WifiOff className="h-4 w-4" />
+            <span className="text-sm font-medium">
+              You're offline. Limited functionality available.
+            </span>
+          </div>
+        </div>
+      </div>
+    )}
       <div className="flex-1 flex flex-col">
         <header className="bg-white border-b shadow-sm">
           <div className="max-w-7xl mx-auto px-4 py-4">
