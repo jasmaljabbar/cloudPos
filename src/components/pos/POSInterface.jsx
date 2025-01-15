@@ -4,6 +4,61 @@ import ProductList from './ProductList';
 import Cart from './Cart';
 import { fetchProducts } from '../../api/endpoints';
 
+
+// IndexedDB setup
+const initDB = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('posDB', 1);
+    
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      
+      // Create products store with index on name for search
+      if (!db.objectStoreNames.contains('products')) {
+        const productStore = db.createObjectStore('products', { keyPath: 'id' });
+        productStore.createIndex('name', 'name', { unique: false });
+      }
+    };
+  });
+};
+
+// DB operations
+const dbOperations = {
+  async saveProducts(products) {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['products'], 'readwrite');
+      const store = transaction.objectStore('products');
+      
+      // Clear existing products
+      store.clear();
+      
+      // Add new products
+      products.forEach(product => {
+        store.add(product);
+      });
+      
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  },
+  
+  async getProducts() {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['products'], 'readonly');
+      const store = transaction.objectStore('products');
+      const request = store.getAll();
+      
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+};
+
 const POSInterface = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [cartItems, setCartItems] = useState([]);
@@ -15,41 +70,36 @@ const POSInterface = () => {
   
   const loadProducts = useCallback(async () => {
     try {
-      // First try to fetch fresh data
-      const data = await fetchProducts();
-      if (data && data.length > 0) {
-        setProducts(data);
-        localStorage.setItem("items", JSON.stringify(data));
-        return;
-      }
-    } catch (err) {
-      console.log('Failed to fetch fresh data, trying local storage:', err);
-    }
-  
-    // If online fetch fails or returns empty, try local storage
-    try {
-      const storedItems = localStorage.getItem('items');
-      if (storedItems) {
-        const parsedItems = JSON.parse(storedItems);
-        if (parsedItems && parsedItems.length > 0) {
-          setProducts(parsedItems);
+      // First try to fetch fresh data when online
+      if (navigator.onLine) {
+        const data = await fetchProducts();
+        if (data && data.length > 0) {
+          setProducts(data);
+          // Save to IndexedDB for offline use
+          await dbOperations.saveProducts(data);
           return;
         }
       }
-    } catch (storageErr) {
-      console.error('Error reading from localStorage:', storageErr);
+      
+      // If offline or online fetch fails, try IndexedDB
+      const storedProducts = await dbOperations.getProducts();
+      if (storedProducts && storedProducts.length > 0) {
+        setProducts(storedProducts);
+        return;
+      }
+      
+      // If both fail, set empty array and show error
+      setProducts([]);
+      setError('Unable to load products. Please check your connection.');
+    } catch (err) {
+      console.error('Error loading products:', err);
+      setError('Error loading products. Please try again.');
     }
-  
-    // If both fail, set empty array and show error
-    setProducts([]);
-    setError('Unable to load products. Please check your connection.');
   }, []);
-  
   
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      // Refresh data when we come back online
       loadProducts();
     };
     const handleOffline = () => setIsOnline(false);
